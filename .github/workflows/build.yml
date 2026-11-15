@@ -20,10 +20,7 @@ jobs:
             echo "Error: No .zip file found in the root directory!"
             exit 1
           fi
-          echo "Extracting $ZIP_FILE..."
           unzip -q "$ZIP_FILE" -d extracted_src
-          
-          # Move inner project files to root (handles bt-hfp-client/ subfolder)
           if [ -d "extracted_src/bt-hfp-client" ]; then
             cp -rf extracted_src/bt-hfp-client/* .
           else
@@ -38,44 +35,39 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Set up Android SDK & Gradle
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: ''
 
       - name: Install Android 33 Build Tools & Platform
         run: |
           sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2"
 
-      - name: Generate Gradle Wrapper if Missing
-        run: |
-          if [ ! -f "./gradlew" ]; then
-            sudo apt-get update && sudo apt-get install -y gradle
-            gradle wrapper --gradle-version 8.2
-          fi
-          chmod +x ./gradlew
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.2'
 
       - name: Build Companion App APK
-        run: |
-          ./gradlew assembleDebug --no-daemon
+        run: gradle :app:assembleDebug --no-daemon
 
       - name: Generate Signing Keystore
         run: |
-          keytool -genkey -v -keystore release.keystore -alias btheadset -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=BtHeadset, OU=Dev, O=Custom, L=Local, S=State, C=US"
+          keytool -genkey -v -keystore release.keystore -alias btheadset -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=BtHeadset, OU=Dev, O=Custom, L=Local, ST=State, C=US"
 
       - name: Build & Sign Magisk RRO Overlay APK
         run: |
           BUILD_TOOLS="$ANDROID_HOME/build-tools/33.0.2"
           ANDROID_JAR="$ANDROID_HOME/platforms/android-33/android.jar"
-          
           mkdir -p overlay_build/compiled
           $BUILD_TOOLS/aapt2 compile --dir magisk-hfp-client/overlay-src/res -o overlay_build/compiled/
-          
           $BUILD_TOOLS/aapt2 link \
             -o overlay_build/hfp-overlay-unsigned.apk \
             -I "$ANDROID_JAR" \
             --manifest magisk-hfp-client/overlay-src/AndroidManifest.xml \
             --auto-add-overlay \
             overlay_build/compiled/*.flat
-            
           $BUILD_TOOLS/zipalign -p -f 4 overlay_build/hfp-overlay-unsigned.apk overlay_build/hfp-overlay-aligned.apk
           $BUILD_TOOLS/apksigner sign --ks release.keystore --ks-pass pass:android --out overlay_build/HfpClientOverlay.apk overlay_build/hfp-overlay-aligned.apk
 
@@ -83,18 +75,12 @@ jobs:
         run: |
           BUILD_TOOLS="$ANDROID_HOME/build-tools/33.0.2"
           RAW_APK=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
-          
           mkdir -p magisk-hfp-client/system/priv-app/BtHeadsetCompanion
           mkdir -p magisk-hfp-client/system/product/overlay
-          
           $BUILD_TOOLS/zipalign -p -f 4 "$RAW_APK" companion-aligned.apk
           $BUILD_TOOLS/apksigner sign --ks release.keystore --ks-pass pass:android --out magisk-hfp-client/system/priv-app/BtHeadsetCompanion/BtHeadsetCompanion.apk companion-aligned.apk
-          
           cp overlay_build/HfpClientOverlay.apk magisk-hfp-client/system/product/overlay/HfpClientOverlay.apk
-          
-          # Remove raw source folder before zipping the Magisk module
           rm -rf magisk-hfp-client/overlay-src
-          
           cd magisk-hfp-client
           zip -r9 ../Magisk-Mi11i-HFP-Client.zip .
 
